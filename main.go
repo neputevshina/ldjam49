@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	_ "embed"
+	"fmt"
 	"image"
 	"image/color"
 	_ "image/png"
@@ -18,21 +19,6 @@ import (
 
 const tilesize = 16
 const plsize = tilesize
-
-//go:embed tempmap
-var fieldstr []byte
-
-//go:embed temptiles.png
-var atlasdata []byte
-
-//go:embed atlas2.png
-var atlas2 []byte
-
-//go:embed player.png
-var kozin []byte
-
-//go:embed 2021.ldtk
-var ldtk []byte
 
 const (
 	dstill = iota
@@ -77,6 +63,7 @@ type game struct {
 	dead      bool
 	lvlclear  bool
 	shkticker uint
+	view      *ebiten.Image
 }
 
 func parseflams(ent []*ldtkgo.Entity) []flammable {
@@ -107,7 +94,7 @@ func parseflams(ent []*ldtkgo.Entity) []flammable {
 func suck(g *game) {
 	var trad = 0.7
 	dbgstr = ""
-	for _, e := range g.flams {
+	for i, e := range g.flams {
 		if e.dead {
 			continue
 		}
@@ -121,10 +108,12 @@ func suck(g *game) {
 		plx, ply := x-g.plx, y-g.ply
 		dis := math.Sqrt(plx*plx + ply*ply)
 		if dis <= trad {
+			dbgstr = fmt.Sprint(e.typ, e.dur, e.dead)
 			g.stamina -= 0.05
-			e.dur -= 0.05
-			if e.dur < 0 {
-				e.dead = true
+			g.flams[i].dur -= 0.05
+			if e.dur <= 0 {
+				g.flams[i].dead = true
+				g.shkticker = 60
 			}
 			if e.typ == ftg {
 				g.lvlclear = true
@@ -143,6 +132,9 @@ func (g *game) Update() error {
 	const jitter = 0.06
 	pplx, pply := g.plx, g.ply
 	g.tick++
+	if g.shkticker != 0 {
+		g.shkticker--
+	}
 
 	g.stamina -= 0.01
 	if g.stamina < 0 {
@@ -229,8 +221,17 @@ func drawstaminabar(scr *ebiten.Image, sta float64, maxsta float64) {
 }
 
 func (g *game) Draw(screen *ebiten.Image) {
-	drawsprites(g, screen)
-	drawpl(g, screen)
+	const shkamnt = 30
+	const shkpik = 60
+	g.view.Clear()
+	drawsprites(g, g.view)
+	drawpl(g, g.view)
+	op := &ebiten.DrawImageOptions{}
+	r := func() float64 {
+		return rand.Float64() * shkamnt * float64(g.shkticker) / shkpik
+	}
+	op.GeoM.Translate(r(), r())
+	screen.DrawImage(g.view, op)
 	drawstaminabar(screen, g.stamina, g.origsta)
 	ebitenutil.DebugPrint(screen, dbgstr)
 }
@@ -311,6 +312,7 @@ func main() {
 	for i := 1; i <= 255; i++ {
 		collider[i] = struct{}{}
 	}
+	gm.view = ebiten.NewImage(gm.Layout(640, 480))
 	pregameinit(gm)
 	if err := ebiten.RunGame(gm); err != nil {
 		log.Fatal(err)

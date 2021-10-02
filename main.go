@@ -49,19 +49,21 @@ var dbgstr string
 var uilayer *ebiten.Image
 
 type game struct {
-	field   *ldtkgo.Layer
+	walls   *ldtkgo.Layer
+	floor   *ldtkgo.Layer
 	ldtk    *ldtkgo.Project
 	plx     float64
 	ply     float64
 	stamina float64
 	init    bool
 	tick    uint
+	death   bool
 }
 
 func (g *game) Update() error {
 	g.tick++
 	const speed = 0.05
-	const jitter = 0.03
+	const jitter = 0.04
 
 	pplx, pply := g.plx, g.ply
 
@@ -94,7 +96,7 @@ func (g *game) Update() error {
 	plux := int(math.Trunc(g.plx))
 	pluy := int(math.Trunc(g.ply))
 
-	tl := g.field.AutoTileAt(plux, pluy)
+	tl := g.walls.AutoTileAt(plux, pluy)
 	if tl != nil {
 		if _, k := collider[tl.ID]; k {
 			g.ply = pply
@@ -119,17 +121,22 @@ func drawpl(g *game, screen *ebiten.Image) {
 func drawsprites(g *game, screen *ebiten.Image) {
 	W := float64(screen.Bounds().Dx())
 	H := float64(screen.Bounds().Dx())
-	for _, t := range g.field.AllTiles() {
-		op := &ebiten.DrawImageOptions{}
-		// fuck ldtk
-		i := t.Position[0] / tilesize
-		j := t.Position[1] / tilesize
-		op.GeoM.Translate(
-			(float64(i)-g.plx)*tilesize+(W)/2,
-			(float64(j)-g.ply)*tilesize+(H-2*plsize)/2,
-		)
-		screen.DrawImage(spritesheet[t.ID], op)
+	spr := func(sp []*ldtkgo.Tile) {
+		for _, t := range sp {
+			op := &ebiten.DrawImageOptions{}
+			// fuck ldtk
+			i := t.Position[0] / tilesize
+			j := t.Position[1] / tilesize
+			op.GeoM.Translate(
+				(float64(i)-g.plx)*tilesize+(W)/2,
+				(float64(j)-g.ply)*tilesize+(H-2*plsize)/2,
+			)
+			screen.DrawImage(spritesheet[t.ID], op)
+		}
 	}
+	spr(g.floor.AllTiles())
+	spr(g.walls.AllTiles())
+
 }
 
 func (g *game) Draw(screen *ebiten.Image) {
@@ -143,7 +150,7 @@ func (g *game) Draw(screen *ebiten.Image) {
 }
 
 func (g *game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
-	return 320, 240
+	return 160, 120
 }
 
 func fieldloader(file []byte) [][]int {
@@ -192,7 +199,8 @@ func pregameinit(g *game) {
 		panic(err)
 	}
 	g.ldtk = proj
-	g.field = g.ldtk.Levels[0].Layers[0]
+	g.walls = g.ldtk.Levels[0].LayerByIdentifier("AutoWalls")
+	g.floor = g.ldtk.Levels[0].LayerByIdentifier("Flooring")
 }
 
 func main() {

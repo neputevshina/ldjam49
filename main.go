@@ -3,8 +3,8 @@ package main
 import (
 	"bytes"
 	_ "embed"
-	"fmt"
 	"image"
+	"image/color"
 	_ "image/png"
 	"log"
 	"math"
@@ -17,7 +17,7 @@ import (
 )
 
 const tilesize = 16
-const plsize = tilesize * 2
+const plsize = tilesize
 
 //go:embed tempmap
 var fieldstr []byte
@@ -32,7 +32,7 @@ var atlas2 []byte
 var kozin []byte
 
 //go:embed 2021.ldtk
-var playfield []byte
+var ldtk []byte
 
 const (
 	dstill = iota
@@ -42,6 +42,20 @@ const (
 	ddown
 )
 
+const (
+	ftg = iota
+	ftoas
+	ftv
+)
+
+type flammable struct {
+	typ  uint
+	dur  float64
+	x    float64
+	y    float64
+	dead bool
+}
+
 var plsprites = make([]*ebiten.Image, 0)
 var spritesheet = make(map[int]*ebiten.Image)
 var collider = make(map[int]struct{})
@@ -49,23 +63,93 @@ var dbgstr string
 var uilayer *ebiten.Image
 
 type game struct {
-	walls   *ldtkgo.Layer
-	floor   *ldtkgo.Layer
-	ldtk    *ldtkgo.Project
-	plx     float64
-	ply     float64
-	stamina float64
-	init    bool
-	tick    uint
-	death   bool
+	ldtk      *ldtkgo.Project
+	l2        *ldtkgo.Layer
+	walls     *ldtkgo.Layer
+	floor     *ldtkgo.Layer
+	flams     []flammable
+	plx       float64
+	ply       float64
+	stamina   float64
+	origsta   float64
+	init      bool
+	tick      uint
+	dead      bool
+	lvlclear  bool
+	shkticker uint
+}
+
+func parseflams(ent []*ldtkgo.Entity) []flammable {
+	fls := make([]flammable, 0, 20)
+	for _, e := range ent {
+		fl := flammable{
+			x:    float64(e.Position[0]) / tilesize,
+			y:    float64(e.Position[1]) / tilesize,
+			dead: false,
+		}
+		switch e.Identifier {
+		case "Tv":
+			fl.dur = 1
+			fl.typ = ftv
+			fls = append(fls, fl)
+		case "Toaster":
+			fl.dur = 0.5
+			fl.typ = ftoas
+			fls = append(fls, fl)
+		case "Target":
+			fl.typ = ftg
+			fls = append(fls, fl)
+		}
+	}
+	return fls
+}
+
+func suck(g *game) {
+	var trad = 0.7
+	dbgstr = ""
+	for _, e := range g.flams {
+		if e.dead {
+			continue
+		}
+		pup := 0.5
+		if e.typ == ftv {
+			trad += 0.5
+			pup = 1
+		}
+		x := e.x + pup
+		y := e.y + pup
+		plx, ply := x-g.plx, y-g.ply
+		dis := math.Sqrt(plx*plx + ply*ply)
+		if dis <= trad {
+			g.stamina -= 0.05
+			e.dur -= 0.05
+			if e.dur < 0 {
+				e.dead = true
+			}
+			if e.typ == ftg {
+				g.lvlclear = true
+			}
+		}
+	}
 }
 
 func (g *game) Update() error {
-	g.tick++
+	if !g.init {
+		gameinit(g)
+		loadlevel(g, 0)
+		g.init = true
+	}
 	const speed = 0.05
-	const jitter = 0.04
-
+	const jitter = 0.06
 	pplx, pply := g.plx, g.ply
+	g.tick++
+
+	g.stamina -= 0.01
+	if g.stamina < 0 {
+		g.dead = true
+	}
+
+	suck(g)
 
 	switch {
 	case ebiten.IsKeyPressed(ebiten.KeyW) && ebiten.IsKeyPressed(ebiten.KeyA):
@@ -99,11 +183,11 @@ func (g *game) Update() error {
 	tl := g.walls.AutoTileAt(plux, pluy)
 	if tl != nil {
 		if _, k := collider[tl.ID]; k {
+			g.stamina -= 0.1
 			g.ply = pply
 			g.plx = pplx
 		}
 	}
-	dbgstr = fmt.Sprintf("x: %.2f y: %.2f\n", g.plx, g.ply)
 	return nil
 }
 
@@ -124,7 +208,7 @@ func drawsprites(g *game, screen *ebiten.Image) {
 	spr := func(sp []*ldtkgo.Tile) {
 		for _, t := range sp {
 			op := &ebiten.DrawImageOptions{}
-			// fuck ldtk
+			// fuck ldtkgo
 			i := t.Position[0] / tilesize
 			j := t.Position[1] / tilesize
 			op.GeoM.Translate(
@@ -136,16 +220,18 @@ func drawsprites(g *game, screen *ebiten.Image) {
 	}
 	spr(g.floor.AllTiles())
 	spr(g.walls.AllTiles())
+	spr(g.l2.AllTiles())
+}
 
+func drawstaminabar(scr *ebiten.Image, sta float64, maxsta float64) {
+	w := float64(scr.Bounds().Dx())
+	ebitenutil.DrawRect(scr, 0, 0, w*sta/maxsta, 4, color.RGBA{0xac, 0x1f, 0x9f, 0xff})
 }
 
 func (g *game) Draw(screen *ebiten.Image) {
-	if !g.init {
-		gameinit(g)
-		g.init = true
-	}
 	drawsprites(g, screen)
 	drawpl(g, screen)
+	drawstaminabar(screen, g.stamina, g.origsta)
 	ebitenutil.DebugPrint(screen, dbgstr)
 }
 
@@ -193,14 +279,27 @@ func gameinit(g *game) {
 	}
 }
 
+func loadlevel(g *game, lv int) {
+	g.walls = g.ldtk.Levels[lv].LayerByIdentifier("AutoWalls")
+	g.floor = g.ldtk.Levels[lv].LayerByIdentifier("Flooring")
+	g.l2 = g.ldtk.Levels[lv].LayerByIdentifier("EntityTiles")
+
+	ent := g.ldtk.Levels[lv].LayerByIdentifier("Entities")
+	pl := ent.EntityByIdentifier("Player")
+
+	g.stamina = pl.PropertyByIdentifier("Stamina").AsFloat64()
+	g.plx = float64(pl.Position[0] / tilesize)
+	g.ply = float64(pl.Position[1] / tilesize)
+	g.origsta = g.stamina
+	g.flams = parseflams(ent.Entities)
+}
+
 func pregameinit(g *game) {
-	proj, err := ldtkgo.Read(playfield)
+	proj, err := ldtkgo.Read(ldtk)
 	if err != nil {
 		panic(err)
 	}
 	g.ldtk = proj
-	g.walls = g.ldtk.Levels[0].LayerByIdentifier("AutoWalls")
-	g.floor = g.ldtk.Levels[0].LayerByIdentifier("Flooring")
 }
 
 func main() {
@@ -212,7 +311,6 @@ func main() {
 	for i := 1; i <= 255; i++ {
 		collider[i] = struct{}{}
 	}
-
 	pregameinit(gm)
 	if err := ebiten.RunGame(gm); err != nil {
 		log.Fatal(err)

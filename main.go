@@ -304,6 +304,7 @@ func pregameinit(g *game) {
 }
 
 func main() {
+	ebiten.SetWindowResizable(false)
 	ebiten.SetWindowSize(640, 480)
 	ebiten.SetWindowTitle("Hello, World!")
 	gm := &game{}

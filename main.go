@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	_ "embed"
-	"fmt"
 	"image"
 	"image/color"
 	_ "image/png"
@@ -19,6 +18,8 @@ import (
 
 const tilesize = 16
 const plsize = tilesize
+const introticks = 90
+const explticks = 2
 
 const (
 	dstill = iota
@@ -34,6 +35,14 @@ const (
 	ftv
 )
 
+const (
+	sinit = iota
+	sintro
+	stitle
+	splay
+	sclear
+)
+
 type flammable struct {
 	typ  uint
 	dur  float64
@@ -42,28 +51,42 @@ type flammable struct {
 	dead bool
 }
 
-var plsprites = make([]*ebiten.Image, 0)
-var spritesheet = make(map[int]*ebiten.Image)
-var collider = make(map[int]struct{})
-var dbgstr string
-var uilayer *ebiten.Image
+var (
+	plsprites   = make([]*ebiten.Image, 0)
+	spritesheet = make(map[int]*ebiten.Image)
+	collider    = make(map[int]struct{})
+	dbgstr      string
+	intropic    *ebiten.Image
+	logopic     *ebiten.Image
+	lqwhite     *ebiten.Image
+)
 
 type game struct {
-	ldtk      *ldtkgo.Project
-	l2        *ldtkgo.Layer
-	walls     *ldtkgo.Layer
-	floor     *ldtkgo.Layer
-	flams     []flammable
+	ldtk  *ldtkgo.Project
+	l2    *ldtkgo.Layer
+	walls *ldtkgo.Layer
+	floor *ldtkgo.Layer
+
+	flams []flammable
+
+	hiscore   int
+	score     int
 	plx       float64
 	ply       float64
 	stamina   float64
 	origsta   float64
-	init      bool
-	tick      uint
-	dead      bool
-	lvlclear  bool
 	shkticker uint
-	view      *ebiten.Image
+	dead      bool
+	lvl       int
+
+	state int
+	tick  uint
+	view  *ebiten.Image
+}
+
+func swstate(g *game, state int) {
+	g.state = state
+	g.tick = 0
 }
 
 func parseflams(ent []*ldtkgo.Entity) []flammable {
@@ -93,7 +116,7 @@ func parseflams(ent []*ldtkgo.Entity) []flammable {
 
 func suck(g *game) {
 	var trad = 0.7
-	dbgstr = ""
+	// dbgstr = ""
 	for i, e := range g.flams {
 		if e.dead {
 			continue
@@ -108,34 +131,37 @@ func suck(g *game) {
 		plx, ply := x-g.plx, y-g.ply
 		dis := math.Sqrt(plx*plx + ply*ply)
 		if dis <= trad {
-			dbgstr = fmt.Sprint(e.typ, e.dur, e.dead)
+			// dbgstr = fmt.Sprint(g.score, e.typ, e.dur, e.dead)
 			g.stamina -= 0.05
 			g.flams[i].dur -= 0.05
+			g.score += 5
 			if e.dur <= 0 {
 				g.flams[i].dead = true
 				g.shkticker = 60
 			}
 			if e.typ == ftg {
-				g.lvlclear = true
+				swstate(g, sclear)
 			}
 		}
 	}
 }
 
-func (g *game) Update() error {
-	if !g.init {
-		gameinit(g)
-		loadlevel(g, 0)
-		g.init = true
+func drawintro(g *game, img *ebiten.Image) {
+	ft := float64(g.tick)
+	fade := 2 * (ft / introticks)
+	if fade >= 1 {
+		fade = 2 * (1 - ft/introticks)
 	}
+	op := ebiten.DrawImageOptions{}
+	op.ColorM.ChangeHSV(0, 0, fade)
+	img.DrawImage(intropic, &op)
+}
+
+func updplay(g *game) {
 	const speed = 0.05
 	const jitter = 0.06
-	pplx, pply := g.plx, g.ply
-	g.tick++
-	if g.shkticker != 0 {
-		g.shkticker--
-	}
 
+	pplx, pply := g.plx, g.ply
 	g.stamina -= 0.01
 	if g.stamina < 0 {
 		g.dead = true
@@ -180,7 +206,6 @@ func (g *game) Update() error {
 			g.plx = pplx
 		}
 	}
-	return nil
 }
 
 func drawpl(g *game, screen *ebiten.Image) {
@@ -220,24 +245,90 @@ func drawstaminabar(scr *ebiten.Image, sta float64, maxsta float64) {
 	ebitenutil.DrawRect(scr, 0, 0, w*sta/maxsta, 4, color.RGBA{0xac, 0x1f, 0x9f, 0xff})
 }
 
+func drawmenu(g *game, screen *ebiten.Image) {
+	screen.DrawImage(logopic, nil)
+	lable :=
+		`          (use  wasd)
+ made by neputevshina, exiphase 
+    & DISN for ludum dare 49
+          in three days
+`
+	ebitenutil.DebugPrintAt(screen, lable, 3, screen.Bounds().Dy()/2+8)
+}
+
+func updmenu(g *game) {
+	if ebiten.IsKeyPressed(ebiten.KeyW) ||
+		ebiten.IsKeyPressed(ebiten.KeyA) ||
+		ebiten.IsKeyPressed(ebiten.KeyS) ||
+		ebiten.IsKeyPressed(ebiten.KeyD) {
+		g.state = splay
+		g.lvl = 0
+		loadlevel(g, g.lvl)
+	}
+}
+
+func (g *game) Update() error {
+	g.tick++
+	if g.shkticker != 0 {
+		g.shkticker--
+	}
+	switch g.state {
+	case sinit:
+		gameinit(g)
+		loadlevel(g, 0)
+		swstate(g, sintro)
+	case sintro:
+		if g.tick > introticks {
+			swstate(g, stitle)
+		}
+	case sclear:
+	case stitle:
+		updmenu(g)
+	case splay:
+		updplay(g)
+	}
+	return nil
+}
+
 func (g *game) Draw(screen *ebiten.Image) {
 	const shkamnt = 30
 	const shkpik = 60
-	g.view.Clear()
-	drawsprites(g, g.view)
-	drawpl(g, g.view)
-	op := &ebiten.DrawImageOptions{}
-	r := func() float64 {
-		return rand.Float64() * shkamnt * float64(g.shkticker) / shkpik
+	var fade float64
+	switch g.state {
+	case sintro:
+		drawintro(g, screen)
+	case stitle:
+		drawmenu(g, screen)
+	case sclear:
+		ft := float64(g.tick)
+		fade = 2 * (ft / explticks)
+		if fade > 1 {
+			fade = 1
+		}
+		op := ebiten.DrawImageOptions{}
+		op.ColorM.Translate(0, 0, 0, fade-1)
+		defer screen.DrawImage(lqwhite, &op)
+		fallthrough
+	case splay:
+		g.view.Clear()
+		drawsprites(g, g.view)
+		drawpl(g, g.view)
+		op := &ebiten.DrawImageOptions{}
+		r := func() float64 {
+			return rand.Float64() * shkamnt * float64(g.shkticker) / shkpik
+		}
+		op.GeoM.Translate(r(), r())
+		screen.DrawImage(g.view, op)
+		drawstaminabar(screen, g.stamina, g.origsta)
+		ebitenutil.DebugPrint(screen, dbgstr)
+		// if g.state == sclear {
+
+		// }
 	}
-	op.GeoM.Translate(r(), r())
-	screen.DrawImage(g.view, op)
-	drawstaminabar(screen, g.stamina, g.origsta)
-	ebitenutil.DebugPrint(screen, dbgstr)
 }
 
 func (g *game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
-	return 160, 120
+	return 200, 160
 }
 
 func fieldloader(file []byte) [][]int {
@@ -266,6 +357,11 @@ func newslicer(data []byte, size int) func(x, y int) *ebiten.Image {
 	}
 }
 
+func wholeimg(data []byte) *ebiten.Image {
+	iimg, _, _ := image.Decode(bytes.NewReader(data))
+	return ebiten.NewImageFromImage(iimg)
+}
+
 func gameinit(g *game) {
 	spr2 := newslicer(atlas2, tilesize)
 	for j := range [16]int{} {
@@ -278,6 +374,11 @@ func gameinit(g *game) {
 	for i := range [6]int{} {
 		plsprites = append(plsprites, plat(0, i))
 	}
+
+	intropic = wholeimg(introdat)
+	logopic = wholeimg(logodat)
+	lqwhite = ebiten.NewImage(g.view.Size())
+	lqwhite.Fill(color.White)
 }
 
 func loadlevel(g *game, lv int) {
@@ -305,7 +406,7 @@ func pregameinit(g *game) {
 
 func main() {
 	ebiten.SetWindowResizable(false)
-	ebiten.SetWindowSize(640, 480)
+	ebiten.SetWindowSize(800, 640)
 	ebiten.SetWindowTitle("Hello, World!")
 	gm := &game{}
 	gm.plx = 1
@@ -313,7 +414,8 @@ func main() {
 	for i := 1; i <= 255; i++ {
 		collider[i] = struct{}{}
 	}
-	gm.view = ebiten.NewImage(gm.Layout(640, 480))
+	gm.lvl = 0
+	gm.view = ebiten.NewImage(gm.Layout(800, 640))
 	pregameinit(gm)
 	if err := ebiten.RunGame(gm); err != nil {
 		log.Fatal(err)

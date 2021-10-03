@@ -16,3 +16,9 @@ var kozin []byte
 
 //go:embed 2021.ldtk
 var ldtk []byte
+
+//go:embed intro.png
+var introdat []byte
+
+//go:embed logo1.png
+var logodat []byte

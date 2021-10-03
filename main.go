@@ -12,7 +12,10 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
+	"github.com/hajimehoshi/ebiten/v2/text"
 	"github.com/solarlune/ldtkgo"
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/opentype"
 	// "github.com/hajimehoshi/ebiten/v2/inpututil"
 )
 
@@ -20,6 +23,8 @@ const tilesize = 16
 const plsize = tilesize
 const introticks = 90
 const explticks = 2
+const basefontsiz = 16
+const basefontlin = 8
 
 const (
 	dstill = iota
@@ -59,6 +64,7 @@ var (
 	intropic    *ebiten.Image
 	logopic     *ebiten.Image
 	lqwhite     *ebiten.Image
+	dfont       font.Face
 )
 
 type game struct {
@@ -245,15 +251,33 @@ func drawstaminabar(scr *ebiten.Image, sta float64, maxsta float64) {
 	ebitenutil.DrawRect(scr, 0, 0, w*sta/maxsta, 4, color.RGBA{0xac, 0x1f, 0x9f, 0xff})
 }
 
+func printlable(screen *ebiten.Image, lable []string, x, y int, c color.Color) {
+	skip := int(math.Ceil(basefontlin * 1.2))
+	basey := y - (len(lable)-1)*(skip)/2
+	for i, l := range lable {
+		r := text.BoundString(dfont, l)
+		cx := r.Bounds().Dx() / 2
+		x := x - cx
+		y := basey + i*skip
+		text.Draw(screen, l, dfont, x, y, c)
+	}
+}
+
 func drawmenu(g *game, screen *ebiten.Image) {
 	screen.DrawImage(logopic, nil)
-	lable :=
-		`          (use  wasd)
- made by neputevshina, exiphase 
-    & DISN for ludum dare 49
-          in three days
-`
-	ebitenutil.DebugPrintAt(screen, lable, 3, screen.Bounds().Dy()/2+8)
+	lable := []string{
+		`made by neputevshina, exiphase`,
+		`and DISN for ludum dare 49`,
+		`in three days`,
+	}
+	blink := []string{`use wasd`}
+	scx := screen.Bounds().Dx() / 2
+	sh := screen.Bounds().Dy()
+	printlable(screen, lable, scx, 6*sh/7, color.White)
+	if (g.tick/30)%2 == 0 {
+		orang := color.RGBA{0xff, 0xc9, 0x00, 0xff}
+		printlable(screen, blink, scx, 9*sh/14, orang)
+	}
 }
 
 func updmenu(g *game) {
@@ -307,6 +331,12 @@ func (g *game) Draw(screen *ebiten.Image) {
 		}
 		op := ebiten.DrawImageOptions{}
 		op.ColorM.Translate(0, 0, 0, fade-1)
+		if g.tick > 30 {
+			screen.Fill(color.White)
+
+			return
+		}
+		// render explosion after level is rendered
 		defer screen.DrawImage(lqwhite, &op)
 		fallthrough
 	case splay:
@@ -321,9 +351,6 @@ func (g *game) Draw(screen *ebiten.Image) {
 		screen.DrawImage(g.view, op)
 		drawstaminabar(screen, g.stamina, g.origsta)
 		ebitenutil.DebugPrint(screen, dbgstr)
-		// if g.state == sclear {
-
-		// }
 	}
 }
 
@@ -379,6 +406,17 @@ func gameinit(g *game) {
 	logopic = wholeimg(logodat)
 	lqwhite = ebiten.NewImage(g.view.Size())
 	lqwhite.Fill(color.White)
+
+	tt, err := opentype.Parse(fontdat)
+	if err != nil {
+		log.Fatal(err)
+	}
+	const dpi = 72
+	dfont, err = opentype.NewFace(tt, &opentype.FaceOptions{
+		Size:    basefontsiz,
+		DPI:     dpi,
+		Hinting: font.HintingFull,
+	})
 }
 
 func loadlevel(g *game, lv int) {

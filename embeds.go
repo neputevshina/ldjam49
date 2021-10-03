@@ -2,23 +2,20 @@ package main
 
 import _ "embed"
 
-//go:embed tempmap
-var fieldstr []byte
-
-//go:embed temptiles.png
-var atlasdata []byte
-
-//go:embed atlas2.png
+//go:embed data/atlas2.png
 var atlas2 []byte
 
-//go:embed player.png
+//go:embed data/player.png
 var kozin []byte
 
-//go:embed 2021.ldtk
+//go:embed data/2021.ldtk
 var ldtk []byte
 
-//go:embed intro.png
+//go:embed data/intro.png
 var introdat []byte
 
-//go:embed logo1.png
+//go:embed data/logo1.png
 var logodat []byte
+
+//go:embed data/PKMN-Mystery-Dungeon.ttf
+var fontdat []byte

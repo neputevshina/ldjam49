@@ -1,6 +1,9 @@
 package main
 
-import _ "embed"
+import (
+	"embed"
+	_ "embed"
+)
 
 //go:embed data/atlas2.png
 var atlas2 []byte
@@ -19,3 +22,9 @@ var logodat []byte
 
 //go:embed data/PKMN-Mystery-Dungeon.ttf
 var fontdat []byte
+
+//go:embed data/expl.png
+var expldat []byte
+
+//go:embed audio/*
+var audiofs embed.FS

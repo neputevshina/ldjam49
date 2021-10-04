@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	_ "embed"
+	"fmt"
 	"image"
 	"image/color"
 	_ "image/png"
@@ -11,6 +12,7 @@ import (
 	"math/rand"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/audio"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/text"
 	"github.com/solarlune/ldtkgo"
@@ -22,9 +24,12 @@ import (
 const tilesize = 16
 const plsize = tilesize
 const introticks = 90
-const explticks = 2
+const explticks = 3
+const deathticks = 60
 const basefontsiz = 16
 const basefontlin = 8
+const shkamnt = 30
+const shkpik = 60
 
 const (
 	dstill = iota
@@ -46,6 +51,8 @@ const (
 	stitle
 	splay
 	sclear
+	sdead
+	sendgame
 )
 
 type flammable struct {
@@ -65,6 +72,7 @@ var (
 	logopic     *ebiten.Image
 	lqwhite     *ebiten.Image
 	dfont       font.Face
+	playexpl    func()
 )
 
 type game struct {
@@ -88,6 +96,7 @@ type game struct {
 	state int
 	tick  uint
 	view  *ebiten.Image
+	bgm   func(bool) *audio.Player
 }
 
 func swstate(g *game, state int) {
@@ -143,7 +152,9 @@ func suck(g *game) {
 			g.score += 5
 			if e.dur <= 0 {
 				g.flams[i].dead = true
+				// TODO: draw explosion here on destroy
 				g.shkticker = 60
+				playexpl()
 			}
 			if e.typ == ftg {
 				swstate(g, sclear)
@@ -171,6 +182,7 @@ func updplay(g *game) {
 	g.stamina -= 0.01
 	if g.stamina < 0 {
 		g.dead = true
+		g.state = sdead
 	}
 
 	suck(g)
@@ -268,7 +280,8 @@ func drawmenu(g *game, screen *ebiten.Image) {
 	lable := []string{
 		`made by neputevshina, exiphase`,
 		`and DISN for ludum dare 49`,
-		`in three days`,
+		`and lulz in three days`,
+		`of october 2021`,
 	}
 	blink := []string{`use wasd`}
 	scx := screen.Bounds().Dx() / 2
@@ -280,19 +293,23 @@ func drawmenu(g *game, screen *ebiten.Image) {
 	}
 }
 
-func updmenu(g *game) {
-	if ebiten.IsKeyPressed(ebiten.KeyW) ||
+func anykey() bool {
+	return ebiten.IsKeyPressed(ebiten.KeyW) ||
 		ebiten.IsKeyPressed(ebiten.KeyA) ||
 		ebiten.IsKeyPressed(ebiten.KeyS) ||
-		ebiten.IsKeyPressed(ebiten.KeyD) {
-		g.state = splay
+		ebiten.IsKeyPressed(ebiten.KeyD)
+}
+
+func updmenu(g *game) {
+	if anykey() {
+		swstate(g, splay)
 		g.lvl = 0
 		loadlevel(g, g.lvl)
 	}
 }
 
 func (g *game) Update() error {
-	g.tick++
+	defer func() { g.tick++ }()
 	if g.shkticker != 0 {
 		g.shkticker--
 	}
@@ -305,24 +322,53 @@ func (g *game) Update() error {
 		if g.tick > introticks {
 			swstate(g, stitle)
 		}
-	case sclear:
 	case stitle:
 		updmenu(g)
+		g.bgm(false)
+		g.score = 0
 	case splay:
+		if g.tick == 1 {
+			g.bgm(true)
+			g.bgm = newsoundcnv(decodeda["game1"])
+		}
+		g.bgm(false)
 		updplay(g)
+	case sclear:
+		if g.tick > 60 && anykey() {
+			g.lvl++
+			if g.lvl < len(g.ldtk.Levels) {
+				loadlevel(g, g.lvl)
+			} else {
+				swstate(g, sendgame)
+			}
+		}
+	case sdead:
+		g.bgm(true)
+		if g.tick > 60 && anykey() {
+			loadlevel(g, g.lvl)
+			swstate(g, splay)
+		}
 	}
 	return nil
 }
 
 func (g *game) Draw(screen *ebiten.Image) {
-	const shkamnt = 30
-	const shkpik = 60
 	var fade float64
 	switch g.state {
 	case sintro:
 		drawintro(g, screen)
 	case stitle:
 		drawmenu(g, screen)
+	case sdead:
+		ft := float64(g.tick)
+		fade = 2 * (ft / deathticks)
+		if fade > 1 {
+			fade = 1
+		}
+		op := ebiten.DrawImageOptions{}
+		op.ColorM.Translate(0, -1, -1, fade-1)
+		drawplayfield(g, screen)
+		screen.DrawImage(lqwhite, &op)
 	case sclear:
 		ft := float64(g.tick)
 		fade = 2 * (ft / explticks)
@@ -331,27 +377,34 @@ func (g *game) Draw(screen *ebiten.Image) {
 		}
 		op := ebiten.DrawImageOptions{}
 		op.ColorM.Translate(0, 0, 0, fade-1)
-		if g.tick > 30 {
+		if g.tick < 60 {
+			drawplayfield(g, screen)
+			screen.DrawImage(lqwhite, &op)
+		} else {
 			screen.Fill(color.White)
-
-			return
+			w := screen.Bounds().Dx() / 2
+			h := screen.Bounds().Dy() / 2
+			printlable(screen, []string{"Level complete"}, w, h,
+				color.RGBA{0xd5, 0x1a, 0x3d, 0xff})
 		}
-		// render explosion after level is rendered
-		defer screen.DrawImage(lqwhite, &op)
-		fallthrough
 	case splay:
-		g.view.Clear()
-		drawsprites(g, g.view)
-		drawpl(g, g.view)
-		op := &ebiten.DrawImageOptions{}
-		r := func() float64 {
-			return rand.Float64() * shkamnt * float64(g.shkticker) / shkpik
-		}
-		op.GeoM.Translate(r(), r())
-		screen.DrawImage(g.view, op)
-		drawstaminabar(screen, g.stamina, g.origsta)
-		ebitenutil.DebugPrint(screen, dbgstr)
+		drawplayfield(g, screen)
 	}
+	dbgstr = fmt.Sprint("tick: ", g.tick)
+	ebitenutil.DebugPrint(screen, dbgstr)
+}
+
+func drawplayfield(g *game, screen *ebiten.Image) {
+	g.view.Clear()
+	drawsprites(g, g.view)
+	drawpl(g, g.view)
+	op := &ebiten.DrawImageOptions{}
+	r := func() float64 {
+		return rand.Float64() * shkamnt * float64(g.shkticker) / shkpik
+	}
+	op.GeoM.Translate(r(), r())
+	screen.DrawImage(g.view, op)
+	drawstaminabar(screen, g.stamina, g.origsta)
 }
 
 func (g *game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
@@ -417,6 +470,8 @@ func gameinit(g *game) {
 		DPI:     dpi,
 		Hinting: font.HintingFull,
 	})
+	g.bgm = newsoundcnv(decodeda["intro"])
+	playexpl = newoneshot(decodeda["expl0"], decodeda["expl1"], decodeda["expl2"])
 }
 
 func loadlevel(g *game, lv int) {
@@ -440,12 +495,13 @@ func pregameinit(g *game) {
 		panic(err)
 	}
 	g.ldtk = proj
+	audioinit()
 }
 
 func main() {
 	ebiten.SetWindowResizable(false)
 	ebiten.SetWindowSize(800, 640)
-	ebiten.SetWindowTitle("Hello, World!")
+	ebiten.SetWindowTitle("Lightning Ball Rampage")
 	gm := &game{}
 	gm.plx = 1
 	gm.ply = 1

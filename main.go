@@ -14,11 +14,11 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
+	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/text"
 	"github.com/solarlune/ldtkgo"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
-	// "github.com/hajimehoshi/ebiten/v2/inpututil"
 )
 
 const tilesize = 16
@@ -30,6 +30,15 @@ const basefontsiz = 16
 const basefontlin = 8
 const shkamnt = 30
 const shkpik = 60
+const flickerpat = `` +
+	`001001011111010000000000010000111111111111111111100000000000` +
+	`000001111111111111000000000000100000000000000000101001010100` +
+	`001011011011020010102020201212012210000000121233200213010100` +
+	`213010021021300213335699787642153612312120010210201020010100` +
+	`000000101001010021023030012020030303030404333334432222100000` +
+	`000000000000000000000000000000000000000000000000000000000000` +
+	`000000000000000000000000000000011111110000000111111110000000` +
+	`000000000000000000000000000000000000000000000000000000000000`
 
 const (
 	dstill = iota
@@ -73,6 +82,7 @@ var (
 	lqwhite     *ebiten.Image
 	dfont       font.Face
 	playexpl    func()
+	playdeaf    func()
 )
 
 type game struct {
@@ -96,7 +106,7 @@ type game struct {
 	state int
 	tick  uint
 	view  *ebiten.Image
-	bgm   func(bool) *audio.Player
+	bgm   func(stfu bool) *audio.Player
 }
 
 func swstate(g *game, state int) {
@@ -275,6 +285,14 @@ func printlable(screen *ebiten.Image, lable []string, x, y int, c color.Color) {
 	}
 }
 
+func drawgroza(img *ebiten.Image, tick int) {
+	const maxu24 = float64(^uint32(0) >> 16)
+	pat := float64((flickerpat[(tick/4)%len(flickerpat)] - '0')) / ('9' - '0')
+	colv := uint32(maxu24 * pat)
+	col := color.RGBA{uint8((colv >> 16) & 0xff), uint8((colv >> 8) & 0xff), uint8(colv & 0xff), 0xff}
+	img.Fill(col)
+}
+
 func drawmenu(g *game, screen *ebiten.Image) {
 	screen.DrawImage(logopic, nil)
 	lable := []string{
@@ -294,10 +312,10 @@ func drawmenu(g *game, screen *ebiten.Image) {
 }
 
 func anykey() bool {
-	return ebiten.IsKeyPressed(ebiten.KeyW) ||
-		ebiten.IsKeyPressed(ebiten.KeyA) ||
-		ebiten.IsKeyPressed(ebiten.KeyS) ||
-		ebiten.IsKeyPressed(ebiten.KeyD)
+	return inpututil.IsKeyJustPressed(ebiten.KeyW) ||
+		inpututil.IsKeyJustPressed(ebiten.KeyA) ||
+		inpututil.IsKeyJustPressed(ebiten.KeyS) ||
+		inpututil.IsKeyJustPressed(ebiten.KeyD)
 }
 
 func updmenu(g *game) {
@@ -334,6 +352,9 @@ func (g *game) Update() error {
 		g.bgm(false)
 		updplay(g)
 	case sclear:
+		if g.tick == 1 {
+			playdeaf()
+		}
 		if g.tick > 60 && anykey() {
 			g.lvl++
 			if g.lvl < len(g.ldtk.Levels) {
@@ -395,7 +416,7 @@ func (g *game) Draw(screen *ebiten.Image) {
 }
 
 func drawplayfield(g *game, screen *ebiten.Image) {
-	g.view.Clear()
+	drawgroza(g.view, int(g.tick))
 	drawsprites(g, g.view)
 	drawpl(g, g.view)
 	op := &ebiten.DrawImageOptions{}
@@ -472,6 +493,7 @@ func gameinit(g *game) {
 	})
 	g.bgm = newsoundcnv(decodeda["intro"])
 	playexpl = newoneshot(decodeda["expl0"], decodeda["expl1"], decodeda["expl2"])
+	playdeaf = newoneshot(decodeda["deaf"])
 }
 
 func loadlevel(g *game, lv int) {

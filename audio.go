@@ -61,6 +61,7 @@ func audioinit() {
 		"expl1": dec("audio/explode1.mp3"),
 		"expl2": dec("audio/explode2.mp3"),
 		"deaf":  dec("audio/minusears.mp3"),
+		"outro": dec("audio/641.mp3"),
 	}
 
 }

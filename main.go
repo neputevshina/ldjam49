@@ -13,6 +13,7 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
+	"github.com/hajimehoshi/ebiten/v2/audio/mp3"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/text"
@@ -21,24 +22,33 @@ import (
 	"golang.org/x/image/font/opentype"
 )
 
-const tilesize = 16
-const plsize = tilesize
-const introticks = 90
-const explticks = 3
-const deathticks = 60
-const basefontsiz = 16
-const basefontlin = 8
-const shkamnt = 30
-const shkpik = 60
-const flickerpat = `` +
-	`001001011111010000000000010000111111111111111111100000000000` +
-	`000001111111111111000000000000100000000000000000101001010100` +
-	`001011011011020010102020201212012210000000121233200213010100` +
-	`213010021021300213335699787642153612312120010210201020010100` +
-	`000000101001010021023030012020030303030404333334432222100000` +
-	`000000000000000000000000000000000000000000000000000000000000` +
-	`000000000000000000000000000000011111110000000111111110000000` +
-	`000000000000000000000000000000000000000000000000000000000000`
+const (
+	tilesize    = 16
+	plsize      = tilesize
+	introticks  = 90
+	explticks   = 3
+	deathticks  = 60
+	basefontsiz = 16
+	basefontlin = 8
+	shkamnt     = 30
+	shkpik      = 60
+	scorespeed  = 0.5
+	flickerpat  = `` +
+		`001001011111010000000000010000111111111111111111100000000000` +
+		`000001111111111111000000000000100000000000000000101001010100` +
+		`001011011011020010102020201212012210000000121233200213010100` +
+		`213010021021300213335699787642153612312120010210201020010100` +
+		`000000101001010021023030012020030303030404333334432222100000` +
+		`000000000000000000000000000000000000000000000000000000000000` +
+		`000000000000000000000000000000011111110000000111111110000000` +
+		`000000000000000000000000000000000000000000000000000000000000`
+)
+
+var (
+	redcol   = color.RGBA{0xd5, 0x1a, 0x3d, 0xff}
+	orangcol = color.RGBA{0xff, 0xc9, 0x00, 0xff}
+	blucol   = color.RGBA{0x63, 0x9b, 0xff, 0xff}
+)
 
 const (
 	dstill = iota
@@ -58,6 +68,7 @@ const (
 	sinit = iota
 	sintro
 	stitle
+	stitle2
 	splay
 	sclear
 	sdead
@@ -65,15 +76,17 @@ const (
 )
 
 type flammable struct {
-	typ  uint
-	dur  float64
-	x    float64
-	y    float64
-	dead bool
+	typ   uint
+	dur   float64
+	x     float64
+	y     float64
+	dead  bool
+	deadt int
 }
 
 var (
 	plsprites   = make([]*ebiten.Image, 0)
+	explspts    = make([]*ebiten.Image, 0)
 	spritesheet = make(map[int]*ebiten.Image)
 	collider    = make(map[int]struct{})
 	dbgstr      string
@@ -97,6 +110,8 @@ type game struct {
 	score     int
 	plx       float64
 	ply       float64
+	lvlw      float64
+	lvlh      float64
 	stamina   float64
 	origsta   float64
 	shkticker uint
@@ -144,6 +159,7 @@ func suck(g *game) {
 	// dbgstr = ""
 	for i, e := range g.flams {
 		if e.dead {
+			g.flams[i].deadt++
 			continue
 		}
 		pup := 0.5
@@ -162,13 +178,36 @@ func suck(g *game) {
 			g.score += 5
 			if e.dur <= 0 {
 				g.flams[i].dead = true
-				// TODO: draw explosion here on destroy
 				g.shkticker = 60
 				playexpl()
 			}
 			if e.typ == ftg {
+				g.score += int(g.stamina * 10)
 				swstate(g, sclear)
 			}
+		}
+	}
+}
+
+func drawsuck(g *game, img *ebiten.Image) {
+	w := float64(img.Bounds().Dx())
+	h := float64(img.Bounds().Dy())
+	for _, e := range g.flams {
+		if e.dead && e.deadt < 48 {
+			op := ebiten.DrawImageOptions{}
+			if e.typ == ftv {
+				op.GeoM.Translate(
+					(float64(e.x)-g.plx)*tilesize+(w)/2+tilesize/2,
+					(float64(e.y)-g.ply)*tilesize+(h-2*plsize)/2+tilesize*2,
+				)
+			} else {
+				op.GeoM.Translate(
+					(float64(e.x)-g.plx)*tilesize+(w)/2,
+					(float64(e.y)-g.ply)*tilesize+(h-2*plsize)/2+tilesize,
+				)
+			}
+			op.CompositeMode = ebiten.CompositeModeLighter
+			img.DrawImage(explspts[e.deadt/4], &op)
 		}
 	}
 }
@@ -227,13 +266,21 @@ func updplay(g *game) {
 	pluy := int(math.Trunc(g.ply))
 
 	tl := g.walls.AutoTileAt(plux, pluy)
-	if tl != nil {
-		if _, k := collider[tl.ID]; k {
-			g.stamina -= 0.1
-			g.ply = pply
-			g.plx = pplx
-		}
+	f := func() bool {
+		_, k := collider[tl.ID]
+		return k
 	}
+	if tl != nil && f() || !inrang(g) {
+		g.stamina -= 0.1
+		g.ply = pply
+		g.plx = pplx
+
+	}
+}
+
+func inrang(g *game) bool {
+	return g.plx > 0 && g.plx < g.lvlw/tilesize &&
+		g.ply > 0 && g.ply < g.lvlh/tilesize
 }
 
 func drawpl(g *game, screen *ebiten.Image) {
@@ -285,6 +332,18 @@ func printlable(screen *ebiten.Image, lable []string, x, y int, c color.Color) {
 	}
 }
 
+func printleft(screen *ebiten.Image, lable []string, x, y int, c color.Color) {
+	skip := int(math.Ceil(basefontlin * 1.2))
+	basey := y - (len(lable)-1)*(skip)/2
+	for i, l := range lable {
+		// r := text.BoundString(dfont, l)
+		// cx := r.Bounds().Dx() / 2
+		x := x
+		y := basey + i*skip
+		text.Draw(screen, l, dfont, x, y, c)
+	}
+}
+
 func drawgroza(img *ebiten.Image, tick int) {
 	const maxu24 = float64(^uint32(0) >> 16)
 	pat := float64((flickerpat[(tick/4)%len(flickerpat)] - '0')) / ('9' - '0')
@@ -301,14 +360,77 @@ func drawmenu(g *game, screen *ebiten.Image) {
 		`and lulz in three days`,
 		`of october 2021`,
 	}
-	blink := []string{`use wasd`}
+	blink := []string{`press any of wasd`}
 	scx := screen.Bounds().Dx() / 2
 	sh := screen.Bounds().Dy()
 	printlable(screen, lable, scx, 6*sh/7, color.White)
 	if (g.tick/30)%2 == 0 {
-		orang := color.RGBA{0xff, 0xc9, 0x00, 0xff}
-		printlable(screen, blink, scx, 9*sh/14, orang)
+		printlable(screen, blink, scx, 9*sh/14, orangcol)
 	}
+}
+
+func drawmenu2(g *game, screen *ebiten.Image) {
+	lable := []string{
+		`destroy electronics. destroy the purple`,
+		`energy counter to complete the level.`,
+		`your charge is going down so better hurry.`,
+		`don't hit the walls!`,
+	}
+	blink := []string{`press any of wasd`, `to continue`}
+	scx := screen.Bounds().Dx() / 2
+	sh := screen.Bounds().Dy()
+	printlable(screen, lable, scx, 3*sh/7, color.White)
+	if (g.tick/30)%2 == 0 {
+		printlable(screen, blink, scx, 13*sh/14, orangcol)
+	}
+}
+
+func x4(f func(screen *ebiten.Image, lable []string, x, y int, c color.Color)) func(
+	screen *ebiten.Image, lable []string, x, y int, c color.Color) {
+	return func(screen *ebiten.Image, lable []string, x, y int, c color.Color) {
+		printlable(screen, lable, x+1, y, c)
+		printlable(screen, lable, x-1, y, c)
+		printlable(screen, lable, x, y+1, c)
+		printlable(screen, lable, x, y-1, c)
+	}
+}
+
+func drawoutro(g *game, screen *ebiten.Image) {
+	lable1 := []string{`thanks for playing!`}
+	lable2 := []string{
+		`made by barabannaya matematika`,
+		`code: neputevshina`,
+		`music and sfx and idea: exiphase`,
+		`art and levels: DISN and other two`,
+	}
+	lable3 := []string{
+		`made using go and ldtk and ebiten`,
+		`and krita and gimp`,
+		`and fl studio and audacity`,
+	}
+	scx := screen.Bounds().Dx() / 2
+	sh := screen.Bounds().Dy()
+
+	op := ebiten.DrawImageOptions{}
+	dx := float64(intropic.Bounds().Dx()) / 2
+	dy := float64(intropic.Bounds().Dy()) / 2
+	printlable(intropic, []string{fmt.Sprint("your score is ", g.score)},
+		100, int(dy/2), orangcol)
+	op.GeoM.Translate(-dx, -dy)
+	s := (math.Sin(float64(g.tick)/32) + 2) / 2
+	op.GeoM.Scale(s, s)
+	op.GeoM.Rotate(float64(g.tick) / (math.Pi * 8))
+	op.GeoM.Translate(dx, dy)
+	op.ColorM.ChangeHSV(1, 1, 0.5)
+	screen.DrawImage(intropic, &op)
+
+	x4(printlable)(screen, lable1, scx, 1*sh/7, color.Black)
+	printlable(screen, lable1, scx, 1*sh/7, blucol)
+	printleft(screen, lable2, 4, 3*sh/7, color.White)
+	printleft(screen, lable3, 4, 5*sh/7, color.White)
+	link := []string{`github.com)neputevshina)ldjam49`}
+	x4(printlable)(screen, link, scx, 13*sh/14, color.Black)
+	printlable(screen, link, scx, 13*sh/14, orangcol)
 }
 
 func anykey() bool {
@@ -319,6 +441,12 @@ func anykey() bool {
 }
 
 func updmenu(g *game) {
+	if anykey() {
+		swstate(g, stitle2)
+	}
+}
+
+func updmenu2(g *game) {
 	if anykey() {
 		swstate(g, splay)
 		g.lvl = 0
@@ -344,10 +472,13 @@ func (g *game) Update() error {
 		updmenu(g)
 		g.bgm(false)
 		g.score = 0
+	case stitle2:
+		updmenu2(g)
+		g.bgm(false)
+		g.score = 0
 	case splay:
 		if g.tick == 1 {
-			g.bgm(true)
-			g.bgm = newsoundcnv(decodeda["game1"])
+			swbgm(g, decodeda["game1"])
 		}
 		g.bgm(false)
 		updplay(g)
@@ -359,6 +490,7 @@ func (g *game) Update() error {
 			g.lvl++
 			if g.lvl < len(g.ldtk.Levels) {
 				loadlevel(g, g.lvl)
+				swstate(g, splay)
 			} else {
 				swstate(g, sendgame)
 			}
@@ -369,17 +501,26 @@ func (g *game) Update() error {
 			loadlevel(g, g.lvl)
 			swstate(g, splay)
 		}
+	case sendgame:
+		if g.tick == 1 {
+			swbgm(g, decodeda["outro"])
+		}
+		g.bgm(false)
 	}
 	return nil
 }
 
 func (g *game) Draw(screen *ebiten.Image) {
+	dbgstr = fmt.Sprint("w: ", g.lvlw, ", h: ", g.lvlh)
+	defer ebitenutil.DebugPrint(screen, dbgstr)
 	var fade float64
 	switch g.state {
 	case sintro:
 		drawintro(g, screen)
 	case stitle:
 		drawmenu(g, screen)
+	case stitle2:
+		drawmenu2(g, screen)
 	case sdead:
 		ft := float64(g.tick)
 		fade = 2 * (ft / deathticks)
@@ -401,18 +542,36 @@ func (g *game) Draw(screen *ebiten.Image) {
 		if g.tick < 60 {
 			drawplayfield(g, screen)
 			screen.DrawImage(lqwhite, &op)
-		} else {
-			screen.Fill(color.White)
-			w := screen.Bounds().Dx() / 2
-			h := screen.Bounds().Dy() / 2
-			printlable(screen, []string{"Level complete"}, w, h,
-				color.RGBA{0xd5, 0x1a, 0x3d, 0xff})
+			return
+		}
+		screen.Fill(color.White)
+		w := screen.Bounds().Dx()
+		h := screen.Bounds().Dy()
+		cw := w / 2
+		ch := h / 2
+		printlable(screen, []string{"Level complete"}, cw, ch,
+			redcol)
+
+		scorepoint := 90 + float64(g.score)*scorespeed
+		if g.tick >= 90 {
+			if float64(g.tick) < scorepoint {
+				cur := float64(g.tick-90) / scorespeed
+				tickstr := fmt.Sprintf("%.0f", cur)
+				printlable(screen, []string{tickstr}, cw, ch+16, redcol)
+			} else {
+				printlable(screen, []string{fmt.Sprint(g.score)}, cw, ch+16, orangcol)
+			}
+		}
+		if float64(g.tick) >= scorepoint+30 && (g.tick/30)%2 == 0 {
+			blink := []string{`press any of wasd`, `to continue`}
+			printlable(screen, blink, cw, 13*h/14, blucol)
 		}
 	case splay:
 		drawplayfield(g, screen)
+		drawsuck(g, screen)
+	case sendgame:
+		drawoutro(g, screen)
 	}
-	dbgstr = fmt.Sprint("tick: ", g.tick)
-	ebitenutil.DebugPrint(screen, dbgstr)
 }
 
 func drawplayfield(g *game, screen *ebiten.Image) {
@@ -463,6 +622,13 @@ func wholeimg(data []byte) *ebiten.Image {
 	return ebiten.NewImageFromImage(iimg)
 }
 
+func swbgm(g *game, bgm *mp3.Stream) {
+	if g.bgm != nil {
+		g.bgm(true).Close()
+	}
+	g.bgm = newsoundcnv(bgm)
+}
+
 func gameinit(g *game) {
 	spr2 := newslicer(atlas2, tilesize)
 	for j := range [16]int{} {
@@ -494,15 +660,29 @@ func gameinit(g *game) {
 	g.bgm = newsoundcnv(decodeda["intro"])
 	playexpl = newoneshot(decodeda["expl0"], decodeda["expl1"], decodeda["expl2"])
 	playdeaf = newoneshot(decodeda["deaf"])
+
+	esl := newslicer(expldat, 32)
+	for j := range [3]int{} {
+		for i := range [4]int{} {
+			explspts = append(explspts, esl(i, j))
+		}
+	}
+
 }
 
 func loadlevel(g *game, lv int) {
+	g.lvlw = float64(g.ldtk.Levels[lv].Width)
+	g.lvlh = float64(g.ldtk.Levels[lv].Height)
+
 	g.walls = g.ldtk.Levels[lv].LayerByIdentifier("AutoWalls")
 	g.floor = g.ldtk.Levels[lv].LayerByIdentifier("Flooring")
 	g.l2 = g.ldtk.Levels[lv].LayerByIdentifier("EntityTiles")
 
 	ent := g.ldtk.Levels[lv].LayerByIdentifier("Entities")
 	pl := ent.EntityByIdentifier("Player")
+	if pl == nil {
+		panic(fmt.Sprint("no player in level ", lv))
+	}
 
 	g.stamina = pl.PropertyByIdentifier("Stamina").AsFloat64()
 	g.plx = float64(pl.Position[0] / tilesize)

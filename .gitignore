@@ -1,2 +1,4 @@
 ldjam49
 ldjam49.exe
+vendor/
+go.sum

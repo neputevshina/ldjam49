@@ -26,7 +26,7 @@ const (
 	plsize      = tilesize
 	introticks  = 90
 	explticks   = 3
-	deathticks  = 60
+	deathticks  = 12
 	basefontsiz = 16
 	basefontlin = 8
 	shkamnt     = 30
@@ -101,6 +101,7 @@ var (
 	dfont       font.Face
 	playexpl    func()
 	playdeaf    func()
+	playspawn   func()
 	introbgm    func(bool) *audio.Player
 	normalbgm   func(bool) *audio.Player
 	outrobgm    func(bool) *audio.Player
@@ -118,8 +119,8 @@ type game struct {
 
 	flams []flammable
 
-	hiscore   int
 	score     int
+	newscore  int
 	plx       float64
 	ply       float64
 	lvlw      float64
@@ -134,6 +135,7 @@ type game struct {
 	tick  uint
 	view  *ebiten.Image
 	bgm   func(stfu bool) *audio.Player
+	buzz  func(stfu bool) *audio.Player
 }
 
 func swstate(g *game, state int) {
@@ -197,14 +199,14 @@ func suck(g *game) {
 			// dbgstr = fmt.Sprint(g.score, e.typ, e.dur, e.dead)
 			g.stamina -= 0.05
 			g.flams[i].dur -= 0.05
-			g.score += 5
+			g.newscore += 5
 			if e.dur <= 0 {
 				g.flams[i].dead = true
 				g.shkticker = 60
 				playexpl()
 			}
 			if e.typ == ftarg {
-				g.score += int(g.stamina * 10)
+				g.newscore += int(g.stamina * 10)
 				swstate(g, sclear)
 			}
 		}
@@ -383,11 +385,15 @@ func drawmenu(g *game, screen *ebiten.Image) {
 		`of october 2021`,
 	}
 	blink := []string{`press any of wasd`}
+	blink2 := []string{`EPILEPSY WARNING`}
 	scx := screen.Bounds().Dx() / 2
 	sh := screen.Bounds().Dy()
 	printlable(screen, lable, scx, 6*sh/7, color.White)
 	if (g.tick/30)%2 == 0 {
-		printlable(screen, blink, scx, 9*sh/14, orangcol)
+		printlable(screen, blink, scx, 9*sh/14-8, orangcol)
+	}
+	if (g.tick/31)%2 == 0 {
+		printlable(screen, blink2, scx, 10*sh/14-3, blucol)
 	}
 }
 
@@ -420,13 +426,14 @@ func x4(f func(screen *ebiten.Image, lable []string, x, y int, c color.Color)) f
 func drawoutro(g *game, screen *ebiten.Image) {
 	lable1 := []string{`thanks for playing!`}
 	lable2 := []string{
-		`made by barabannaya matematika`,
+		`barabannaya matematika are...`,
 		`code: neputevshina`,
-		`music and sfx and idea: exiphase`,
+		`music and sfx and idea: exiphase (kuamarin)`,
 		`art and levels: DISN and other two`,
 	}
 	lable3 := []string{
-		`made using go and ldtk and ebiten`,
+		`made from scratch using go`,
+		`and ebiten and ldtk and ldtkgo`,
 		`and krita and gimp`,
 		`and fl studio and audacity`,
 	}
@@ -436,7 +443,7 @@ func drawoutro(g *game, screen *ebiten.Image) {
 	op := ebiten.DrawImageOptions{}
 	dx := float64(intropic.Bounds().Dx()) / 2
 	dy := float64(intropic.Bounds().Dy()) / 2
-	printlable(intropic, []string{fmt.Sprint("your score is ", g.score)},
+	printlable(intropic, []string{fmt.Sprint("your score is ", g.newscore)},
 		100, int(dy/2), orangcol)
 	op.GeoM.Translate(-dx, -dy)
 	s := (math.Sin(float64(g.tick)/32) + 2) / 2
@@ -455,25 +462,27 @@ func drawoutro(g *game, screen *ebiten.Image) {
 	printlable(screen, link, scx, 13*sh/14, orangcol)
 }
 
-func drawflamimgs(g *game, img *ebiten.Image) {
+func drawflams(g *game, img *ebiten.Image) {
 	W := float64(img.Bounds().Dx())
 	H := float64(img.Bounds().Dx())
 	for _, e := range g.flams {
-		op := &ebiten.DrawImageOptions{}
+		op := ebiten.DrawImageOptions{}
+		op.GeoM.Translate(-float64(e.w*tilesize)/2, -float64(e.h*tilesize)/2)
+		op.GeoM.Rotate(float64(e.rot) * math.Pi / 2)
+		op.GeoM.Translate(float64(e.w*tilesize)/2, float64(e.h*tilesize)/2)
 		op.GeoM.Translate(
 			(e.x-g.plx)*tilesize+(W)/2,
 			(e.y-g.ply)*tilesize+(H-2*plsize)/2,
 		)
-		op.GeoM.Rotate(4 * float64(e.rot) * math.Pi / 2)
 		if !e.dead {
-			img.DrawImage(e.img, op)
+			img.DrawImage(e.img, &op)
 		} else {
 			if e.h == 1 && e.w == 1 {
-				img.DrawImage(dead11, op)
+				img.DrawImage(dead11, &op)
 			} else if e.h == 1 && e.w == 2 {
-				img.DrawImage(dead21, op)
+				img.DrawImage(dead21, &op)
 			} else if e.h == 2 && e.w == 2 {
-				img.DrawImage(dead22, op)
+				img.DrawImage(dead22, &op)
 			}
 		}
 	}
@@ -517,13 +526,14 @@ func (g *game) Update() error {
 	case stitle:
 		updmenu(g)
 		g.bgm(false)
-		g.score = 0
 	case stitle2:
 		updmenu2(g)
 		g.bgm(false)
 		g.score = 0
 	case splay:
 		if g.tick == 1 {
+			g.score = g.newscore
+			playspawn()
 			swbgm(g, normalbgm)
 		}
 		g.bgm(false)
@@ -544,12 +554,15 @@ func (g *game) Update() error {
 		}
 	case sdead:
 		g.bgm(true)
-		if g.tick > 60 && anykey() {
+		if g.tick > 120 && anykey() {
 			loadlevel(g, g.lvl)
-			swstate(g, splay)
+			g.newscore = 0
+			g.score = 0
+			swstate(g, stitle)
 		}
 	case sendgame:
 		if g.tick == 1 {
+			g.score = g.newscore
 			swbgm(g, outrobgm)
 		}
 		g.bgm(false)
@@ -574,10 +587,26 @@ func (g *game) Draw(screen *ebiten.Image) {
 		if fade > 1 {
 			fade = 1
 		}
+		screen.Fill(color.White)
+		w := screen.Bounds().Dx()
+		h := screen.Bounds().Dy()
+		cw := w / 2
+		ch := h / 2
 		op := ebiten.DrawImageOptions{}
 		op.ColorM.Translate(0, -1, -1, fade-1)
 		drawplayfield(g, screen)
-		screen.DrawImage(lqwhite, &op)
+		if g.tick < 60 {
+			drawplayfield(g, screen)
+			screen.DrawImage(lqwhite, &op)
+			return
+		}
+		screen.Fill(color.RGBA{0xff, 0, 0, 0xff})
+		printlable(screen, []string{"YOU ARE DEAD"}, cw, ch, color.Black)
+		if float64(g.tick) >= 90 && (g.tick/30)%2 == 0 {
+			blink := []string{`press any of wasd`, `to go to title screen`}
+			printlable(screen, blink, cw, 13*h/14, color.Black)
+		}
+
 	case sclear:
 		ft := float64(g.tick)
 		fade = 2 * (ft / explticks)
@@ -599,17 +628,17 @@ func (g *game) Draw(screen *ebiten.Image) {
 		printlable(screen, []string{"Level complete"}, cw, ch,
 			redcol)
 
-		scorepoint := 90 + float64(g.score)*scorespeed
+		scorepoint := 90 + float64(g.newscore-g.score)*scorespeed
 		if g.tick >= 90 {
 			if float64(g.tick) < scorepoint {
-				cur := float64(g.tick-90) / scorespeed
+				cur := float64(g.score) + float64(g.tick-90)/scorespeed
 				tickstr := fmt.Sprintf("%.0f", cur)
 				printlable(screen, []string{tickstr}, cw, ch+16, redcol)
 			} else {
-				printlable(screen, []string{fmt.Sprint(g.score)}, cw, ch+16, orangcol)
+				printlable(screen, []string{fmt.Sprint(g.newscore)}, cw, ch+16, orangcol)
 			}
 		}
-		if float64(g.tick) >= scorepoint+30 && (g.tick/30)%2 == 0 {
+		if float64(g.tick) >= scorepoint && (g.tick/30)%2 == 0 {
 			blink := []string{`press any of wasd`, `to continue`}
 			printlable(screen, blink, cw, 13*h/14, blucol)
 		}
@@ -625,7 +654,7 @@ func (g *game) Draw(screen *ebiten.Image) {
 func drawplayfield(g *game, screen *ebiten.Image) {
 	drawgroza(g.view, int(g.tick))
 	drawsprites(g, g.view)
-	drawflamimgs(g, g.view)
+	drawflams(g, g.view)
 	drawpl(g, g.view)
 	op := &ebiten.DrawImageOptions{}
 	r := func() float64 {
@@ -707,6 +736,7 @@ func gameinit(g *game) {
 	})
 	playexpl = newoneshot(decodeda["expl0"], decodeda["expl1"], decodeda["expl2"])
 	playdeaf = newoneshot(decodeda["deaf"])
+	playspawn = newoneshot(decodeda["spawn"])
 
 	introbgm = newsoundcnv(decodeda["intro"])
 	normalbgm = newsoundcnv(decodeda["game1"])

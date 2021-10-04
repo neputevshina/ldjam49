@@ -55,13 +55,15 @@ func audioinit() {
 	}
 
 	decodeda = map[string]*mp3.Stream{
-		"intro": dec("audio/640_compo_song.mp3"),
-		"game1": dec("audio/music01.mp3"),
+		"intro": dec("audio/menu_music.mp3"),
+		"game1": dec("audio/level1_music.mp3"),
 		"expl0": dec("audio/explode0.mp3"),
 		"expl1": dec("audio/explode1.mp3"),
 		"expl2": dec("audio/explode2.mp3"),
 		"deaf":  dec("audio/minusears.mp3"),
 		"outro": dec("audio/641.mp3"),
+		"spawn": dec("audio/spawn_fadeout.mp3"),
+		"buzz":  dec("audio/poweron.mp3"),
 	}
 
 }

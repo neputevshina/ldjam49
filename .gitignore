@@ -2,3 +2,5 @@ ldjam49
 ldjam49.exe
 vendor/
 go.sum
+.vscode/
+__debug_bin

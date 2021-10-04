@@ -13,7 +13,6 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
-	"github.com/hajimehoshi/ebiten/v2/audio/mp3"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/text"
@@ -33,6 +32,7 @@ const (
 	shkamnt     = 30
 	shkpik      = 60
 	scorespeed  = 0.5
+	tileprice   = 0.25
 	flickerpat  = `` +
 		`001001011111010000000000010000111111111111111111100000000000` +
 		`000001111111111111000000000000100000000000000000101001010100` +
@@ -59,9 +59,9 @@ const (
 )
 
 const (
-	ftg = iota
+	ftarg = iota
 	ftoas
-	ftv
+	freg
 )
 
 const (
@@ -76,7 +76,12 @@ const (
 )
 
 type flammable struct {
-	typ   uint
+	typ uint
+	w   uint
+	h   uint
+	img *ebiten.Image
+	rot int
+
 	dur   float64
 	x     float64
 	y     float64
@@ -96,6 +101,13 @@ var (
 	dfont       font.Face
 	playexpl    func()
 	playdeaf    func()
+	introbgm    func(bool) *audio.Player
+	normalbgm   func(bool) *audio.Player
+	outrobgm    func(bool) *audio.Player
+	flamimgs    = make(map[string]*ebiten.Image)
+	dead11      *ebiten.Image
+	dead22      *ebiten.Image
+	dead21      *ebiten.Image
 )
 
 type game struct {
@@ -133,21 +145,36 @@ func parseflams(ent []*ldtkgo.Entity) []flammable {
 	fls := make([]flammable, 0, 20)
 	for _, e := range ent {
 		fl := flammable{
+			w:    uint(e.Width / tilesize),
+			h:    uint(e.Height / tilesize),
 			x:    float64(e.Position[0]) / tilesize,
 			y:    float64(e.Position[1]) / tilesize,
 			dead: false,
 		}
+		fl.dur = float64(fl.w*fl.h) * tileprice
 		switch e.Identifier {
 		case "Tv":
-			fl.dur = 1
-			fl.typ = ftv
-			fls = append(fls, fl)
+			fl.rot = e.PropertyByIdentifier("Rot").AsInt()
+			fallthrough
+		case "Microwave":
+			fallthrough
 		case "Toaster":
-			fl.dur = 0.5
-			fl.typ = ftoas
-			fls = append(fls, fl)
+			fl.typ = freg
+			pf := e.PropertyByIdentifier("Type").Value
+			s := ""
+			if pf == nil {
+				s = e.Identifier
+			} else {
+				s = pf.(string)
+			}
+			fl.img = flamimgs[s]
 		case "Target":
-			fl.typ = ftg
+			fl.typ = ftarg
+			fl.dur = 0
+			fl.rot = e.PropertyByIdentifier("Rot").AsInt()
+			fl.img = flamimgs["Target"]
+		}
+		if e.Identifier != "Player" {
 			fls = append(fls, fl)
 		}
 	}
@@ -155,23 +182,18 @@ func parseflams(ent []*ldtkgo.Entity) []flammable {
 }
 
 func suck(g *game) {
-	var trad = 0.7
 	// dbgstr = ""
 	for i, e := range g.flams {
 		if e.dead {
 			g.flams[i].deadt++
 			continue
 		}
-		pup := 0.5
-		if e.typ == ftv {
-			trad += 0.5
-			pup = 1
-		}
-		x := e.x + pup
-		y := e.y + pup
+		r := math.Sqrt(float64(e.w*e.h)/math.Pi) * 1.5
+		x := e.x + float64(e.w)/2
+		y := e.y + float64(e.h)/2
 		plx, ply := x-g.plx, y-g.ply
 		dis := math.Sqrt(plx*plx + ply*ply)
-		if dis <= trad {
+		if dis <= r {
 			// dbgstr = fmt.Sprint(g.score, e.typ, e.dur, e.dead)
 			g.stamina -= 0.05
 			g.flams[i].dur -= 0.05
@@ -181,7 +203,7 @@ func suck(g *game) {
 				g.shkticker = 60
 				playexpl()
 			}
-			if e.typ == ftg {
+			if e.typ == ftarg {
 				g.score += int(g.stamina * 10)
 				swstate(g, sclear)
 			}
@@ -195,7 +217,7 @@ func drawsuck(g *game, img *ebiten.Image) {
 	for _, e := range g.flams {
 		if e.dead && e.deadt < 48 {
 			op := ebiten.DrawImageOptions{}
-			if e.typ == ftv {
+			if e.typ == freg {
 				op.GeoM.Translate(
 					(float64(e.x)-g.plx)*tilesize+(w)/2+tilesize/2,
 					(float64(e.y)-g.ply)*tilesize+(h-2*plsize)/2+tilesize*2,
@@ -433,6 +455,30 @@ func drawoutro(g *game, screen *ebiten.Image) {
 	printlable(screen, link, scx, 13*sh/14, orangcol)
 }
 
+func drawflamimgs(g *game, img *ebiten.Image) {
+	W := float64(img.Bounds().Dx())
+	H := float64(img.Bounds().Dx())
+	for _, e := range g.flams {
+		op := &ebiten.DrawImageOptions{}
+		op.GeoM.Translate(
+			(e.x-g.plx)*tilesize+(W)/2,
+			(e.y-g.ply)*tilesize+(H-2*plsize)/2,
+		)
+		op.GeoM.Rotate(4 * float64(e.rot) * math.Pi / 2)
+		if !e.dead {
+			img.DrawImage(e.img, op)
+		} else {
+			if e.h == 1 && e.w == 1 {
+				img.DrawImage(dead11, op)
+			} else if e.h == 1 && e.w == 2 {
+				img.DrawImage(dead21, op)
+			} else if e.h == 2 && e.w == 2 {
+				img.DrawImage(dead22, op)
+			}
+		}
+	}
+}
+
 func anykey() bool {
 	return inpututil.IsKeyJustPressed(ebiten.KeyW) ||
 		inpututil.IsKeyJustPressed(ebiten.KeyA) ||
@@ -478,7 +524,7 @@ func (g *game) Update() error {
 		g.score = 0
 	case splay:
 		if g.tick == 1 {
-			swbgm(g, decodeda["game1"])
+			swbgm(g, normalbgm)
 		}
 		g.bgm(false)
 		updplay(g)
@@ -490,6 +536,7 @@ func (g *game) Update() error {
 			g.lvl++
 			if g.lvl < len(g.ldtk.Levels) {
 				loadlevel(g, g.lvl)
+				g.bgm = nil
 				swstate(g, splay)
 			} else {
 				swstate(g, sendgame)
@@ -503,7 +550,7 @@ func (g *game) Update() error {
 		}
 	case sendgame:
 		if g.tick == 1 {
-			swbgm(g, decodeda["outro"])
+			swbgm(g, outrobgm)
 		}
 		g.bgm(false)
 	}
@@ -511,7 +558,7 @@ func (g *game) Update() error {
 }
 
 func (g *game) Draw(screen *ebiten.Image) {
-	dbgstr = fmt.Sprint("w: ", g.lvlw, ", h: ", g.lvlh)
+	// dbgstr = fmt.Sprint("w: ", g.lvlw, ", h: ", g.lvlh)
 	defer ebitenutil.DebugPrint(screen, dbgstr)
 	var fade float64
 	switch g.state {
@@ -569,6 +616,7 @@ func (g *game) Draw(screen *ebiten.Image) {
 	case splay:
 		drawplayfield(g, screen)
 		drawsuck(g, screen)
+		drawstaminabar(screen, g.stamina, g.origsta)
 	case sendgame:
 		drawoutro(g, screen)
 	}
@@ -577,6 +625,7 @@ func (g *game) Draw(screen *ebiten.Image) {
 func drawplayfield(g *game, screen *ebiten.Image) {
 	drawgroza(g.view, int(g.tick))
 	drawsprites(g, g.view)
+	drawflamimgs(g, g.view)
 	drawpl(g, g.view)
 	op := &ebiten.DrawImageOptions{}
 	r := func() float64 {
@@ -584,36 +633,22 @@ func drawplayfield(g *game, screen *ebiten.Image) {
 	}
 	op.GeoM.Translate(r(), r())
 	screen.DrawImage(g.view, op)
-	drawstaminabar(screen, g.stamina, g.origsta)
 }
 
 func (g *game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
 	return 200, 160
 }
 
-func fieldloader(file []byte) [][]int {
-	fl := make([][]int, 0, 100)
-	buf := make([]int, 0, 100)
-	for _, v := range file {
-		if v == '\n' {
-			fl = append(fl, buf)
-			buf = make([]int, 0, 100)
-		} else if v == '1' {
-			buf = append(buf, 1)
-		} else if v == '0' {
-			buf = append(buf, 0)
-		}
-	}
-	fl = append(fl, buf)
-	return fl
+func newslicer(data []byte, s int) func(x, y int) *ebiten.Image {
+	return newslicer2(data, s, s)
 }
 
-func newslicer(data []byte, size int) func(x, y int) *ebiten.Image {
+func newslicer2(data []byte, w, h int) func(x, y int) *ebiten.Image {
 	atlimg, _, _ := image.Decode(bytes.NewReader(data))
 	atlas := ebiten.NewImageFromImage(atlimg)
 	return func(x, y int) *ebiten.Image {
-		x, y = x*size, y*size
-		return ebiten.NewImageFromImage(atlas.SubImage(image.Rect(x, y, x+size, y+size)))
+		x, y = x*w, y*h
+		return ebiten.NewImageFromImage(atlas.SubImage(image.Rect(x, y, x+w, y+h)))
 	}
 }
 
@@ -622,20 +657,33 @@ func wholeimg(data []byte) *ebiten.Image {
 	return ebiten.NewImageFromImage(iimg)
 }
 
-func swbgm(g *game, bgm *mp3.Stream) {
+func swbgm(g *game, f func(bool) *audio.Player) {
 	if g.bgm != nil {
-		g.bgm(true).Close()
+		g.bgm(true)
 	}
-	g.bgm = newsoundcnv(bgm)
+	g.bgm = f
 }
 
 func gameinit(g *game) {
-	spr2 := newslicer(atlas2, tilesize)
+	s11 := newslicer(atlas2, tilesize)
 	for j := range [16]int{} {
 		for i := range [16]int{} {
-			spritesheet[i+16*j] = spr2(i, j)
+			spritesheet[i+16*j] = s11(i, j)
 		}
 	}
+
+	s22 := newslicer(atlas2, tilesize*2)
+	s21 := newslicer2(atlas2, tilesize*2, tilesize)
+	flamimgs["Tv"] = s22(0, 1)
+	flamimgs["Wash"] = s22(1, 1)
+	flamimgs["Microwave"] = s21(0, 4)
+	flamimgs["Toaster"] = s11(2, 4)
+	flamimgs["Target"] = s11(3, 4)
+	flamimgs[""] = s11(2, 4)
+
+	dead11 = newslicer(dead11dat, tilesize)(0, 0)
+	dead21 = newslicer2(dead21dat, tilesize*2, tilesize)(0, 0)
+	dead22 = newslicer(dead22dat, tilesize*2)(0, 0)
 
 	plat := newslicer(kozin, plsize)
 	for i := range [6]int{} {
@@ -657,9 +705,13 @@ func gameinit(g *game) {
 		DPI:     dpi,
 		Hinting: font.HintingFull,
 	})
-	g.bgm = newsoundcnv(decodeda["intro"])
 	playexpl = newoneshot(decodeda["expl0"], decodeda["expl1"], decodeda["expl2"])
 	playdeaf = newoneshot(decodeda["deaf"])
+
+	introbgm = newsoundcnv(decodeda["intro"])
+	normalbgm = newsoundcnv(decodeda["game1"])
+	outrobgm = newsoundcnv(decodeda["outro"])
+	g.bgm = introbgm
 
 	esl := newslicer(expldat, 32)
 	for j := range [3]int{} {

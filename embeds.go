@@ -28,3 +28,12 @@ var expldat []byte
 
 //go:embed audio/*
 var audiofs embed.FS
+
+//go:embed data/babah16.png
+var dead11dat []byte
+
+//go:embed data/babah32.png
+var dead22dat []byte
+
+//go:embed data/babah1632.png
+var dead21dat []byte

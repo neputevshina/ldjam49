@@ -5,7 +5,9 @@ Also [itch page](https://neputevshina.itch.io/lbr)!
 ## Build
 Just clone and run `go build`.
 
-**WARNING** If you do this be sure you using go at least 1.16 since it has `embed` package.
+**WARNING** If you do this be sure you using go at least 1.16 since it has `embed` package. Go from Ubuntu's repo is outdated. Use builds if in doubt. 
+
+Play from itch.io app if you don't trust my code. It will sandbox it.
 ## Credits
 Logo: DISN
 

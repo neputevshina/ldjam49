@@ -4,6 +4,8 @@
 Also [itch page](https://neputevshina.itch.io/lbr)!
 ## Build
 Just clone and run `go build`.
+
+**WARNING** If you do this be sure you using go at least 1.16 since it has `embed` package.
 ## Credits
 Logo: DISN
 

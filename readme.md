@@ -2,6 +2,8 @@
 [Entry for LD Jam 49](https://ldjam.com/events/ludum-dare/49/lightning-ball-rampage) made by [@kuamarin](https://github.com/kuamarin), DISN and me.
 
 Also [itch page](https://neputevshina.itch.io/lbr)!
+
+If you have any issues running builds send an issue to this repo or write a comment on LD site.
 ## Build
 Just clone and run `go build`.
 

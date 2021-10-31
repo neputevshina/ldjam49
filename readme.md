@@ -1,5 +1,6 @@
 # BARABANNAYA MATEMATIKA'S LIGHTNING BALL RAMPAGE
 **UPD**: absolute dogshit. 1000+-th place. Do not play.
+
 [Entry for LD Jam 49](https://ldjam.com/events/ludum-dare/49/lightning-ball-rampage) made by [@kuamarin](https://github.com/kuamarin), DISN and me.
 
 Also [itch page](https://neputevshina.itch.io/lbr)!
